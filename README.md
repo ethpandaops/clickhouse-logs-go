@@ -133,12 +133,13 @@ clickhouselogs.Regex("error.*timeout")
 | `Scan` | Pipeline processing | No | No | None |
 | `Stream` | Large datasets | No | No | None |
 
+## Example
+
+See [clickhouse-logs-go-example](https://github.com/ethpandaops/clickhouse-logs-go-example) for a web-based log viewer that demonstrates Fetch and streaming via Server-Sent Events.
+
 ## Testing
 
 ```bash
-# Unit tests
-go test ./...
-
-# Integration tests (requires Docker)
-go test -tags=integration ./...
+# Unit + integration tests (requires Docker)
+go test -race ./...
 ```
