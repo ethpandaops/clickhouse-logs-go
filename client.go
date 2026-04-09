@@ -287,6 +287,64 @@ func (c *Client) Stream(ctx context.Context, q *Query) (*Iterator, error) {
 	}, nil
 }
 
+// Distinct executes a SELECT DISTINCT query for a single column and returns the values.
+// The column must be one of the log table columns (e.g. "Namespace", "Pod", "Node").
+// Results are returned sorted ascending. Retries on transient errors.
+func (c *Client) Distinct(ctx context.Context, q *Query, column string) ([]string, error) {
+	if err := q.validate(); err != nil {
+		return nil, fmt.Errorf("invalid query: %w", err)
+	}
+
+	sql := q.buildDistinct(column)
+	col, colData := distinctColumn(column)
+
+	var values []string
+
+	err := doWithRetry(ctx, c.config, "distinct", func(attemptCtx context.Context) error {
+		col.Reset()
+
+		values = values[:0]
+
+		return c.pool.Do(attemptCtx, ch.Query{
+			Body:     sql,
+			Result:   proto.Results{{Name: column, Data: colData}},
+			Settings: c.querySettings(),
+			OnResult: func(_ context.Context, _ proto.Block) error {
+				for i := 0; i < col.Rows(); i++ {
+					values = append(values, col.Row(i))
+				}
+
+				return nil
+			},
+		})
+	})
+	if err != nil {
+		return nil, fmt.Errorf("distinct failed: %w", err)
+	}
+
+	return values, nil
+}
+
+// distinctColumn returns the appropriate column reader for a given column name.
+// LowCardinality columns need ColLowCardinality[string], plain strings use ColStr.
+func distinctColumn(column string) (interface {
+	Rows() int
+	Row(int) string
+	Reset()
+}, proto.Column) {
+	switch column {
+	case "Pod", "Message":
+		col := new(proto.ColStr)
+
+		return col, col
+	default:
+		// Namespace, IngressUser, Container, Node, Stream are all LowCardinality
+		col := new(proto.ColStr).LowCardinality()
+
+		return col, col
+	}
+}
+
 func (c *Client) querySettings() []ch.Setting {
 	if c.maxBlockSize <= 0 {
 		return nil

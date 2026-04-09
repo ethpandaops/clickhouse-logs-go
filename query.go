@@ -184,7 +184,49 @@ func (q *Query) build(defaultOrder orderDirection) string {
 
 	sb.WriteString("SELECT Timestamp, IngressUser, Namespace, Pod, Container, Node, Stream, Message FROM ")
 	sb.WriteString(q.source.String())
+	sb.WriteString(" WHERE ")
+	sb.WriteString(q.whereClause())
 
+	effectiveOrder := q.order
+	if effectiveOrder == orderUnset {
+		effectiveOrder = defaultOrder
+	}
+
+	switch effectiveOrder {
+	case orderAsc:
+		sb.WriteString(" ORDER BY Timestamp ASC")
+	case orderDesc:
+		sb.WriteString(" ORDER BY Timestamp DESC")
+	case orderNone, orderUnset:
+		// no ORDER BY
+	}
+
+	if q.limit > 0 {
+		fmt.Fprintf(&sb, " LIMIT %d", q.limit)
+	}
+
+	return sb.String()
+}
+
+// buildDistinct generates a SELECT DISTINCT query for a single column.
+func (q *Query) buildDistinct(column string) string {
+	var sb strings.Builder
+
+	sb.WriteString("SELECT DISTINCT ")
+	sb.WriteString(column)
+	sb.WriteString(" FROM ")
+	sb.WriteString(q.source.String())
+	sb.WriteString(" WHERE ")
+	sb.WriteString(q.whereClause())
+	sb.WriteString(" ORDER BY ")
+	sb.WriteString(column)
+	sb.WriteString(" ASC")
+
+	return sb.String()
+}
+
+// whereClause generates the WHERE conditions without the WHERE keyword.
+func (q *Query) whereClause() string {
 	conditions := make([]string, 0, 8)
 
 	conditions = append(conditions,
@@ -224,26 +266,5 @@ func (q *Query) build(defaultOrder orderDirection) string {
 		conditions = append(conditions, q.search.clause())
 	}
 
-	sb.WriteString(" WHERE ")
-	sb.WriteString(strings.Join(conditions, " AND "))
-
-	effectiveOrder := q.order
-	if effectiveOrder == orderUnset {
-		effectiveOrder = defaultOrder
-	}
-
-	switch effectiveOrder {
-	case orderAsc:
-		sb.WriteString(" ORDER BY Timestamp ASC")
-	case orderDesc:
-		sb.WriteString(" ORDER BY Timestamp DESC")
-	case orderNone, orderUnset:
-		// no ORDER BY
-	}
-
-	if q.limit > 0 {
-		fmt.Fprintf(&sb, " LIMIT %d", q.limit)
-	}
-
-	return sb.String()
+	return strings.Join(conditions, " AND ")
 }
