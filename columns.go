@@ -6,6 +6,12 @@ import (
 	"github.com/ClickHouse/ch-go/proto"
 )
 
+const (
+	columnPod     = "Pod"
+	columnStream  = "Stream"
+	columnMessage = "Message"
+)
+
 // logColumns holds the ch-go column definitions for log queries.
 // DateTime64 is explicitly set to UTC to avoid ch-go's default of time.Local.
 // LowCardinality columns use ColLowCardinality[string] to match the schema.
@@ -38,11 +44,11 @@ func (c *logColumns) results() proto.Results {
 		{Name: "Timestamp", Data: c.timestamp},
 		{Name: "IngressUser", Data: c.ingressUser},
 		{Name: "Namespace", Data: c.namespace},
-		{Name: "Pod", Data: c.pod},
+		{Name: columnPod, Data: c.pod},
 		{Name: "Container", Data: c.container},
 		{Name: "Node", Data: c.node},
-		{Name: "Stream", Data: c.stream},
-		{Name: "Message", Data: c.message},
+		{Name: columnStream, Data: c.stream},
+		{Name: columnMessage, Data: c.message},
 	}
 }
 
