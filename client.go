@@ -240,7 +240,7 @@ func (c *Client) Stream(ctx context.Context, q *Query) (*Iterator, error) {
 	sql := q.build(orderNone)
 	results := make(chan iteratorEntry, 1)
 
-	queryCtx, cancel := context.WithCancel(ctx) //nolint:gosec // G118: cancel is passed to Iterator.Close
+	queryCtx, cancel := context.WithCancel(ctx)
 
 	go func() {
 		defer close(results)
@@ -333,7 +333,7 @@ func distinctColumn(column string) (interface {
 	Reset()
 }, proto.Column) {
 	switch column {
-	case "Pod", "Message":
+	case columnPod, columnMessage:
 		col := new(proto.ColStr)
 
 		return col, col
