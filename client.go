@@ -259,7 +259,7 @@ func (c *Client) Stream(ctx context.Context, q *Query) (*Iterator, error) {
 
 				entries := make([]LogEntry, 0, n)
 
-				for i := 0; i < n; i++ {
+				for i := range n {
 					entries = append(entries, cols.row(i))
 				}
 

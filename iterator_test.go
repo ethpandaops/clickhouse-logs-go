@@ -13,7 +13,7 @@ import (
 func makeEntries(n int) []LogEntry {
 	entries := make([]LogEntry, 0, n)
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		entries = append(entries, LogEntry{
 			Timestamp: time.Date(2025, 1, 1, 0, 0, i, 0, time.UTC),
 			Message:   fmt.Sprintf("msg-%d", i),
@@ -87,7 +87,7 @@ func TestIterator_Error(t *testing.T) {
 
 func TestIterator_EarlyClose(t *testing.T) {
 	ch := make(chan iteratorEntry, 10)
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		ch <- iteratorEntry{entries: makeEntries(1)}
 	}
 
@@ -158,7 +158,7 @@ func TestIterator_CloseUnblocksProducer(t *testing.T) {
 		defer close(done)
 
 		// Simulate a producer that sends many batches.
-		for i := 0; i < 100; i++ {
+		for range 100 {
 			ch <- iteratorEntry{entries: makeEntries(1)}
 		}
 
