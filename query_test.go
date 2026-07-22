@@ -15,8 +15,8 @@ var (
 )
 
 func TestSource_String(t *testing.T) {
-	assert.Equal(t, "logs_internal.logs", Internal.String())
-	assert.Equal(t, "logs_external.logs", External.String())
+	assert.Equal(t, "internal.otel_logs", Internal.String())
+	assert.Equal(t, "external.otel_logs", External.String())
 }
 
 func TestQuery_Validate(t *testing.T) {
@@ -75,7 +75,7 @@ func TestQuery_Build_MinimalQuery(t *testing.T) {
 	q := NewQuery(Internal).From(testFrom).To(testTo)
 	sql := q.build(orderNone)
 
-	assert.Contains(t, sql, "FROM logs_internal.logs")
+	assert.Contains(t, sql, "FROM internal.otel_logs")
 	assert.Contains(t, sql, "Timestamp >= toDateTime64('2025-01-01 00:00:00.000', 3)")
 	assert.Contains(t, sql, "Timestamp < toDateTime64('2025-01-01 01:00:00.000', 3)")
 	assert.NotContains(t, sql, "ORDER BY")
@@ -86,7 +86,7 @@ func TestQuery_Build_ExternalSource(t *testing.T) {
 	q := NewQuery(External).From(testFrom).To(testTo)
 	sql := q.build(orderNone)
 
-	assert.Contains(t, sql, "FROM logs_external.logs")
+	assert.Contains(t, sql, "FROM external.otel_logs")
 }
 
 func TestQuery_Build_AllFilters(t *testing.T) {
@@ -105,12 +105,12 @@ func TestQuery_Build_AllFilters(t *testing.T) {
 	sql := q.build(orderDesc)
 
 	assert.Contains(t, sql, "IngressUser = 'sigma'")
-	assert.Contains(t, sql, "Namespace IN ('mainnet', 'testnet')")
-	assert.Contains(t, sql, "Pod = 'my-pod-123'")
-	assert.Contains(t, sql, "Container IN ('reth', 'lighthouse')")
-	assert.Contains(t, sql, "Node IN ('node-1', 'node-2')")
-	assert.Contains(t, sql, "Stream IN ('stderr')")
-	assert.Contains(t, sql, "hasToken(Message, 'ERROR')")
+	assert.Contains(t, sql, "`k8s.namespace.name` IN ('mainnet', 'testnet')")
+	assert.Contains(t, sql, "`k8s.pod.name` = 'my-pod-123'")
+	assert.Contains(t, sql, "`k8s.container.name` IN ('reth', 'lighthouse')")
+	assert.Contains(t, sql, "`k8s.node.name` IN ('node-1', 'node-2')")
+	assert.Contains(t, sql, "LogAttributes['stream'] IN ('stderr')")
+	assert.Contains(t, sql, "hasToken(Body, 'ERROR')")
 	assert.Contains(t, sql, "LIMIT 100")
 	assert.Contains(t, sql, "ORDER BY Timestamp DESC")
 }
@@ -119,7 +119,7 @@ func TestQuery_Build_PodLike(t *testing.T) {
 	q := NewQuery(Internal).From(testFrom).To(testTo).PodLike("%tysm%")
 	sql := q.build(orderNone)
 
-	assert.Contains(t, sql, "Pod LIKE '%tysm%'")
+	assert.Contains(t, sql, "`k8s.pod.name` LIKE '%tysm%'")
 }
 
 func TestQuery_Build_SearchModes(t *testing.T) {
@@ -131,37 +131,37 @@ func TestQuery_Build_SearchModes(t *testing.T) {
 		{
 			name:   "token",
 			search: Token("ERROR"),
-			want:   "hasToken(Message, 'ERROR')",
+			want:   "hasToken(Body, 'ERROR')",
 		},
 		{
 			name:   "tokens",
 			search: Tokens("error", "timeout"),
-			want:   "hasAllTokens(Message, 'error timeout')",
+			want:   "hasAllTokens(Body, 'error timeout')",
 		},
 		{
 			name:   "substring",
 			search: Substring("panic:"),
-			want:   "Message LIKE '%panic:%'",
+			want:   "Body LIKE '%panic:%'",
 		},
 		{
 			name:   "regex",
 			search: Regex("error.*timeout"),
-			want:   "match(Message, 'error.*timeout')",
+			want:   "match(Body, 'error.*timeout')",
 		},
 		{
 			name:   "token with quote",
 			search: Token("O'Brien"),
-			want:   "hasToken(Message, 'O''Brien')",
+			want:   "hasToken(Body, 'O''Brien')",
 		},
 		{
 			name:   "token with backslash",
 			search: Token(`C:\temp`),
-			want:   `hasToken(Message, 'C:\\temp')`,
+			want:   `hasToken(Body, 'C:\\temp')`,
 		},
 		{
 			name:   "substring with percent",
 			search: Substring("100%"),
-			want:   `Message LIKE '%100\\%%'`,
+			want:   `Body LIKE '%100\\%%'`,
 		},
 	}
 
@@ -239,7 +239,7 @@ func TestQuery_Build_EscapesSpecialChars(t *testing.T) {
 	sql := q.build(orderNone)
 
 	assert.Contains(t, sql, "IngressUser = 'user''with\"quotes'")
-	assert.Contains(t, sql, `Pod = 'pod\\with\\backslash'`)
+	assert.Contains(t, sql, "`k8s.pod.name` = 'pod\\\\with\\\\backslash'")
 }
 
 func TestQuery_Build_TimezoneConversion(t *testing.T) {
@@ -277,5 +277,9 @@ func TestQuery_Build_SelectColumns(t *testing.T) {
 	q := NewQuery(Internal).From(testFrom).To(testTo)
 	sql := q.build(orderNone)
 
-	assert.True(t, strings.HasPrefix(sql, "SELECT Timestamp, IngressUser, Namespace, Pod, Container, Node, Stream, Message FROM"))
+	// Physical columns are aliased back to the logical names LogEntry uses.
+	assert.True(t, strings.HasPrefix(sql, "SELECT Timestamp AS Timestamp, IngressUser AS IngressUser, "+
+		"`k8s.namespace.name` AS Namespace, `k8s.pod.name` AS Pod, "+
+		"`k8s.container.name` AS Container, `k8s.node.name` AS Node, "+
+		"LogAttributes['stream'] AS Stream, Body AS Message FROM"))
 }

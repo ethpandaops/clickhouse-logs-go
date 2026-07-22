@@ -87,8 +87,25 @@ if err := iter.Err(); err != nil {
 
 ### Sources
 
-- `clickhouselogs.Internal` — `logs_internal.logs`
-- `clickhouselogs.External` — `logs_external.logs`
+- `clickhouselogs.Internal` — `internal.otel_logs` (platform/infrastructure logs)
+- `clickhouselogs.External` — `external.otel_logs` (devnet/testnet node logs)
+
+Both are OpenTelemetry-schema tables. `LogEntry` keeps its original field names;
+each query projects the physical columns onto them:
+
+| `LogEntry` field | Column |
+|---|---|
+| `Timestamp` | `Timestamp` (`DateTime64(9)`) |
+| `IngressUser` | `IngressUser` |
+| `Namespace` | `k8s.namespace.name` |
+| `Pod` | `k8s.pod.name` |
+| `Container` | `k8s.container.name` |
+| `Node` | `k8s.node.name` |
+| `Stream` | `LogAttributes['stream']` |
+| `Message` | `Body` |
+
+`Stream` is populated on the external tenant and empty on internal, which does
+not set that attribute.
 
 ### Filters
 

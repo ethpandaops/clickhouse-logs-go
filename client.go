@@ -332,17 +332,16 @@ func distinctColumn(column string) (interface {
 	Row(int) string
 	Reset()
 }, proto.Column) {
-	switch column {
-	case columnPod, columnMessage:
-		col := new(proto.ColStr)
-
-		return col, col
-	default:
-		// Namespace, IngressUser, Container, Node, Stream are all LowCardinality
+	if isLowCardinality(column) {
 		col := new(proto.ColStr).LowCardinality()
 
 		return col, col
 	}
+
+	// Message reads Body, and Stream is a map lookup — both plain String.
+	col := new(proto.ColStr)
+
+	return col, col
 }
 
 func (c *Client) querySettings() []ch.Setting {

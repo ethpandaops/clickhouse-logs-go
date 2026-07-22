@@ -49,12 +49,12 @@ func TestSearch_Clause(t *testing.T) {
 		{
 			name:   "regex with backslash",
 			search: Regex(`err\d+`),
-			want:   `match(Message, 'err\\d+')`,
+			want:   `match(Body, 'err\\d+')`,
 		},
 		{
 			name:   "tokens with quotes",
 			search: Tokens("it's", "O'Brien"),
-			want:   "hasAllTokens(Message, 'it''s O''Brien')",
+			want:   "hasAllTokens(Body, 'it''s O''Brien')",
 		},
 	}
 
