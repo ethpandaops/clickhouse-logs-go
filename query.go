@@ -10,9 +10,11 @@ import (
 type Source int
 
 const (
-	// Internal queries logs_internal.logs.
+	// Internal queries internal.otel_logs — operator platform and
+	// infrastructure logs.
 	Internal Source = iota
-	// External queries logs_external.logs.
+	// External queries external.otel_logs — devnet and testnet node
+	// container logs.
 	External
 )
 
@@ -20,13 +22,27 @@ const (
 func (s Source) String() string {
 	switch s {
 	case Internal:
-		return "logs_internal.logs"
+		return "internal.otel_logs"
 	case External:
-		return "logs_external.logs"
+		return "external.otel_logs"
 	default:
-		return "logs_internal.logs"
+		return "internal.otel_logs"
 	}
 }
+
+// selectList projects the physical schema onto the logical column names, so
+// the decoded block layout is the same regardless of how the underlying table
+// spells its columns.
+var selectList = strings.Join([]string{
+	exprTimestamp + " AS " + columnTimestamp,
+	exprIngressUser + " AS " + columnIngressUser,
+	exprNamespace + " AS " + columnNamespace,
+	exprPod + " AS " + columnPod,
+	exprContainer + " AS " + columnContainer,
+	exprNode + " AS " + columnNode,
+	exprStream + " AS " + columnStream,
+	exprMessage + " AS " + columnMessage,
+}, ", ")
 
 // orderDirection represents the ORDER BY direction for a query.
 type orderDirection int
@@ -182,7 +198,9 @@ func (q *Query) validate() error {
 func (q *Query) build(defaultOrder orderDirection) string {
 	var sb strings.Builder
 
-	sb.WriteString("SELECT Timestamp, IngressUser, Namespace, Pod, Container, Node, Stream, Message FROM ")
+	sb.WriteString("SELECT ")
+	sb.WriteString(selectList)
+	sb.WriteString(" FROM ")
 	sb.WriteString(q.source.String())
 	sb.WriteString(" WHERE ")
 	sb.WriteString(q.whereClause())
@@ -208,11 +226,16 @@ func (q *Query) build(defaultOrder orderDirection) string {
 	return sb.String()
 }
 
-// buildDistinct generates a SELECT DISTINCT query for a single column.
+// buildDistinct generates a SELECT DISTINCT query for a single logical column,
+// aliased back to that name so the caller decodes a predictable block.
 func (q *Query) buildDistinct(column string) string {
 	var sb strings.Builder
 
+	expr := physicalColumn(column)
+
 	sb.WriteString("SELECT DISTINCT ")
+	sb.WriteString(expr)
+	sb.WriteString(" AS ")
 	sb.WriteString(column)
 	sb.WriteString(" FROM ")
 	sb.WriteString(q.source.String())
@@ -235,31 +258,31 @@ func (q *Query) whereClause() string {
 	)
 
 	if q.ingressUser != "" {
-		conditions = append(conditions, fmt.Sprintf("IngressUser = %s", quoteLiteral(q.ingressUser)))
+		conditions = append(conditions, fmt.Sprintf("%s = %s", exprIngressUser, quoteLiteral(q.ingressUser)))
 	}
 
 	if len(q.namespaces) > 0 {
-		conditions = append(conditions, fmt.Sprintf("Namespace IN %s", formatIN(q.namespaces)))
+		conditions = append(conditions, fmt.Sprintf("%s IN %s", exprNamespace, formatIN(q.namespaces)))
 	}
 
 	if q.pod != "" {
-		conditions = append(conditions, fmt.Sprintf("Pod = %s", quoteLiteral(q.pod)))
+		conditions = append(conditions, fmt.Sprintf("%s = %s", exprPod, quoteLiteral(q.pod)))
 	}
 
 	if q.podLike != "" {
-		conditions = append(conditions, fmt.Sprintf("Pod LIKE %s", quoteLiteral(q.podLike)))
+		conditions = append(conditions, fmt.Sprintf("%s LIKE %s", exprPod, quoteLiteral(q.podLike)))
 	}
 
 	if len(q.containers) > 0 {
-		conditions = append(conditions, fmt.Sprintf("Container IN %s", formatIN(q.containers)))
+		conditions = append(conditions, fmt.Sprintf("%s IN %s", exprContainer, formatIN(q.containers)))
 	}
 
 	if len(q.nodes) > 0 {
-		conditions = append(conditions, fmt.Sprintf("Node IN %s", formatIN(q.nodes)))
+		conditions = append(conditions, fmt.Sprintf("%s IN %s", exprNode, formatIN(q.nodes)))
 	}
 
 	if len(q.streams) > 0 {
-		conditions = append(conditions, fmt.Sprintf("Stream IN %s", formatIN(q.streams)))
+		conditions = append(conditions, fmt.Sprintf("%s IN %s", exprStream, formatIN(q.streams)))
 	}
 
 	if q.search != nil {

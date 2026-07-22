@@ -18,21 +18,34 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-const createTableSQL = `
-CREATE TABLE IF NOT EXISTS logs_internal.logs (
-    Timestamp   DateTime64(3),
-    LogDate     Date DEFAULT toDate(Timestamp),
-    IngressUser LowCardinality(String),
-    Namespace   LowCardinality(String),
-    Pod         String,
-    Container   LowCardinality(String),
-    Node        LowCardinality(String),
-    Stream      LowCardinality(String),
-    Message     String
-) ENGINE = MergeTree()
-ORDER BY (IngressUser, Node, Timestamp)
-PARTITION BY LogDate
-`
+// Mirrors the production OpenTelemetry log schema: k8s.* are materialized
+// columns promoted from ResourceAttributes, the message lives in Body, and
+// the stdout/stderr stream is only available as a LogAttributes entry.
+const createTableSQL = "" +
+	"CREATE TABLE IF NOT EXISTS internal.otel_logs (\n" +
+	"    Timestamp              DateTime64(9),\n" +
+	"    IngressUser            LowCardinality(String),\n" +
+	"    ServiceName            LowCardinality(String),\n" +
+	"    Body                   String,\n" +
+	"    LogAttributes          Map(LowCardinality(String), String),\n" +
+	"    ResourceAttributes     Map(LowCardinality(String), String),\n" +
+	"    `k8s.namespace.name`   LowCardinality(String),\n" +
+	"    `k8s.pod.name`         LowCardinality(String),\n" +
+	"    `k8s.container.name`   LowCardinality(String),\n" +
+	"    `k8s.node.name`        LowCardinality(String)\n" +
+	") ENGINE = MergeTree()\n" +
+	"ORDER BY (IngressUser, toStartOfFiveMinutes(Timestamp), ServiceName, Timestamp)\n" +
+	"PARTITION BY toDate(Timestamp)\n"
+
+// tenantShape selects which identity columns a test row populates. Rows from
+// k8s workloads fill the k8s.* columns and leave ResourceAttributes empty;
+// VM-hosted devnet nodes do the opposite. Both must decode identically.
+type tenantShape int
+
+const (
+	shapeK8s tenantShape = iota
+	shapeVM
+)
 
 var testPool *chpool.Pool //nolint:gochecknoglobals // shared test container
 var testAddr string       //nolint:gochecknoglobals // shared test container address
@@ -83,7 +96,7 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	if err := testPool.Do(ctx, ch.Query{Body: "CREATE DATABASE IF NOT EXISTS logs_internal"}); err != nil {
+	if err := testPool.Do(ctx, ch.Query{Body: "CREATE DATABASE IF NOT EXISTS internal"}); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create database: %v\n", err)
 		os.Exit(1)
 	}
@@ -107,42 +120,70 @@ func TestMain(m *testing.M) {
 func insertTestRows(t *testing.T, entries []LogEntry) {
 	t.Helper()
 
+	insertTestRowsAs(t, entries, shapeK8s)
+}
+
+func insertTestRowsAs(t *testing.T, entries []LogEntry, shape tenantShape) {
+	t.Helper()
+
 	ctx := context.Background()
 
 	// Truncate first so tests are isolated.
-	require.NoError(t, testPool.Do(ctx, ch.Query{Body: "TRUNCATE TABLE logs_internal.logs"}))
+	require.NoError(t, testPool.Do(ctx, ch.Query{Body: "TRUNCATE TABLE internal.otel_logs"}))
 
-	colTimestamp := new(proto.ColDateTime64).WithPrecision(proto.PrecisionMilli).WithLocation(time.UTC)
+	colTimestamp := new(proto.ColDateTime64).WithPrecision(proto.PrecisionNano).WithLocation(time.UTC)
 	colIngressUser := new(proto.ColStr)
+	colServiceName := new(proto.ColStr)
 	colNamespace := new(proto.ColStr)
 	colPod := new(proto.ColStr)
 	colContainer := new(proto.ColStr)
 	colNode := new(proto.ColStr)
-	colStream := new(proto.ColStr)
-	colMessage := new(proto.ColStr)
+	colBody := new(proto.ColStr)
+	colLogAttributes := proto.NewMap[string, string](new(proto.ColStr).LowCardinality(), new(proto.ColStr))
+	colResourceAttributes := proto.NewMap[string, string](new(proto.ColStr).LowCardinality(), new(proto.ColStr))
 
 	for _, e := range entries {
 		colTimestamp.Append(e.Timestamp)
 		colIngressUser.Append(e.IngressUser)
-		colNamespace.Append(e.Namespace)
-		colPod.Append(e.Pod)
-		colContainer.Append(e.Container)
-		colNode.Append(e.Node)
-		colStream.Append(e.Stream)
-		colMessage.Append(e.Message)
+		colBody.Append(e.Message)
+		colLogAttributes.Append(map[string]string{"stream": e.Stream})
+
+		// Each shape populates exactly one identity carrier and leaves the
+		// other empty, mirroring how the two tenants actually store rows.
+		switch shape {
+		case shapeK8s:
+			colServiceName.Append(e.Container)
+			colNamespace.Append(e.Namespace)
+			colPod.Append(e.Pod)
+			colContainer.Append(e.Container)
+			colNode.Append(e.Node)
+			colResourceAttributes.Append(map[string]string{})
+		case shapeVM:
+			colServiceName.Append(e.Container)
+			colNamespace.Append("")
+			colPod.Append("")
+			colContainer.Append("")
+			colNode.Append("")
+			colResourceAttributes.Append(map[string]string{
+				"network":   e.Namespace,
+				"host.name": e.Pod,
+			})
+		}
 	}
 
 	err := testPool.Do(ctx, ch.Query{
-		Body: "INSERT INTO logs_internal.logs VALUES",
+		Body: "INSERT INTO internal.otel_logs VALUES",
 		Input: proto.Input{
 			{Name: "Timestamp", Data: colTimestamp},
 			{Name: "IngressUser", Data: colIngressUser},
-			{Name: "Namespace", Data: colNamespace},
-			{Name: "Pod", Data: colPod},
-			{Name: "Container", Data: colContainer},
-			{Name: "Node", Data: colNode},
-			{Name: "Stream", Data: colStream},
-			{Name: "Message", Data: colMessage},
+			{Name: "ServiceName", Data: colServiceName},
+			{Name: "Body", Data: colBody},
+			{Name: "LogAttributes", Data: colLogAttributes},
+			{Name: "ResourceAttributes", Data: colResourceAttributes},
+			{Name: "k8s.namespace.name", Data: colNamespace},
+			{Name: "k8s.pod.name", Data: colPod},
+			{Name: "k8s.container.name", Data: colContainer},
+			{Name: "k8s.node.name", Data: colNode},
 		},
 	})
 	require.NoError(t, err)
@@ -483,4 +524,52 @@ func TestIntegration_OwnPoolLifecycle(t *testing.T) {
 
 	// Start is idempotent.
 	require.NoError(t, client.Start(context.Background()))
+}
+
+// TestIntegration_VMTenantIdentity covers rows from VM-hosted devnet nodes,
+// which leave every k8s.* column empty and describe themselves through
+// ResourceAttributes instead. Without the fallbacks these decode blank, which
+// silently strips pod/namespace/node from every result.
+func TestIntegration_VMTenantIdentity(t *testing.T) {
+	entries := []LogEntry{
+		{
+			Timestamp:   time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC),
+			IngressUser: "sigma", Namespace: "glamsterdam-devnet-7",
+			Pod: "prysm-geth-1", Container: "beacon", Node: "ignored-for-vm",
+			Stream: "stdout", Message: "tysm_hook_exec fired",
+		},
+	}
+	insertTestRowsAs(t, entries, shapeVM)
+
+	client := NewWithPool(testPool, testLogger())
+
+	got, err := client.Fetch(context.Background(), NewQuery(Internal).
+		From(time.Date(2025, 6, 15, 9, 0, 0, 0, time.UTC)).
+		To(time.Date(2025, 6, 15, 11, 0, 0, 0, time.UTC)).
+		Limit(10))
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+
+	assert.Equal(t, "glamsterdam-devnet-7", got[0].Namespace, "Namespace should fall back to ResourceAttributes['network']")
+	assert.Equal(t, "prysm-geth-1", got[0].Pod, "Pod should fall back to ResourceAttributes['host.name']")
+	assert.Equal(t, "prysm-geth-1", got[0].Node, "Node should fall back to the host, since the VM is the machine")
+	assert.Equal(t, "beacon", got[0].Container, "Container should fall back to ServiceName")
+	assert.Equal(t, "tysm_hook_exec fired", got[0].Message)
+
+	// Filtering has to resolve through the same fallback, or the activation
+	// detail view finds nothing.
+	filtered, err := client.Fetch(context.Background(), NewQuery(Internal).
+		From(time.Date(2025, 6, 15, 9, 0, 0, 0, time.UTC)).
+		To(time.Date(2025, 6, 15, 11, 0, 0, 0, time.UTC)).
+		Pod("prysm-geth-1").
+		Namespace("glamsterdam-devnet-7").
+		Limit(10))
+	require.NoError(t, err)
+	assert.Len(t, filtered, 1, "filtering by pod/namespace must match VM-tenant rows")
+
+	pods, err := client.Distinct(context.Background(), NewQuery(Internal).
+		From(time.Date(2025, 6, 15, 9, 0, 0, 0, time.UTC)).
+		To(time.Date(2025, 6, 15, 11, 0, 0, 0, time.UTC)), "Pod")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"prysm-geth-1"}, pods)
 }

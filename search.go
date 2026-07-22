@@ -18,14 +18,14 @@ type tokenSearch struct {
 	token string
 }
 
-// Token creates a message search using hasToken(Message, 'token').
+// Token creates a message search using hasToken(Body, 'token').
 // Accelerated by the full_text index. Case-sensitive. Matches whole words only.
 func Token(token string) MessageSearch {
 	return &tokenSearch{token: token}
 }
 
 func (s *tokenSearch) clause() string {
-	return fmt.Sprintf("hasToken(Message, %s)", quoteLiteral(s.token))
+	return fmt.Sprintf("hasToken(%s, %s)", exprMessage, quoteLiteral(s.token))
 }
 
 func (s *tokenSearch) validate() error {
@@ -45,7 +45,7 @@ type tokensSearch struct {
 	tokens []string
 }
 
-// Tokens creates a message search using hasAllTokens(Message, 'token1 token2 ...').
+// Tokens creates a message search using hasAllTokens(Body, 'token1 token2 ...').
 // All tokens must be present. Accelerated by the full_text index. Case-sensitive.
 // Rejects more than 64 tokens (ClickHouse hasAllTokens limit).
 func Tokens(tokens ...string) MessageSearch {
@@ -59,7 +59,7 @@ func (s *tokensSearch) clause() string {
 		escaped = append(escaped, escapeString(tok))
 	}
 
-	return fmt.Sprintf("hasAllTokens(Message, '%s')", strings.Join(escaped, " "))
+	return fmt.Sprintf("hasAllTokens(%s, '%s')", exprMessage, strings.Join(escaped, " "))
 }
 
 func (s *tokensSearch) validate() error {
@@ -89,7 +89,7 @@ type substringSearch struct {
 	substr string
 }
 
-// Substring creates a message search using Message LIKE '%%substr%%'.
+// Substring creates a message search using Body LIKE '%%substr%%'.
 // NOT accelerated by the full_text index. Case-sensitive.
 func Substring(substr string) MessageSearch {
 	return &substringSearch{substr: substr}
@@ -101,7 +101,7 @@ func (s *substringSearch) clause() string {
 	// 2. escapeString: escape for SQL string literal (\ → \\, ' → '')
 	// ClickHouse processes the SQL string layer first (\\ → \), then LIKE uses the result.
 	// ClickHouse uses \ as the default LIKE escape character (no ESCAPE clause needed).
-	return fmt.Sprintf("Message LIKE '%%%s%%'", escapeString(escapeForLike(s.substr)))
+	return fmt.Sprintf("%s LIKE '%%%s%%'", exprMessage, escapeString(escapeForLike(s.substr)))
 }
 
 func (s *substringSearch) validate() error {
@@ -117,14 +117,14 @@ type regexSearch struct {
 	pattern string
 }
 
-// Regex creates a message search using match(Message, 'pattern').
+// Regex creates a message search using match(Body, 'pattern').
 // NOT accelerated by the full_text index. Case-sensitive. Use sparingly.
 func Regex(pattern string) MessageSearch {
 	return &regexSearch{pattern: pattern}
 }
 
 func (s *regexSearch) clause() string {
-	return fmt.Sprintf("match(Message, %s)", quoteLiteral(s.pattern))
+	return fmt.Sprintf("match(%s, %s)", exprMessage, quoteLiteral(s.pattern))
 }
 
 func (s *regexSearch) validate() error {
