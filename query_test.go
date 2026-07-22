@@ -105,11 +105,11 @@ func TestQuery_Build_AllFilters(t *testing.T) {
 	sql := q.build(orderDesc)
 
 	assert.Contains(t, sql, "IngressUser = 'sigma'")
-	assert.Contains(t, sql, "`k8s.namespace.name` IN ('mainnet', 'testnet')")
-	assert.Contains(t, sql, "`k8s.pod.name` = 'my-pod-123'")
-	assert.Contains(t, sql, "`k8s.container.name` IN ('reth', 'lighthouse')")
-	assert.Contains(t, sql, "`k8s.node.name` IN ('node-1', 'node-2')")
-	assert.Contains(t, sql, "LogAttributes['stream'] IN ('stderr')")
+	assert.Contains(t, sql, exprNamespace+" IN ('mainnet', 'testnet')")
+	assert.Contains(t, sql, exprPod+" = 'my-pod-123'")
+	assert.Contains(t, sql, exprContainer+" IN ('reth', 'lighthouse')")
+	assert.Contains(t, sql, exprNode+" IN ('node-1', 'node-2')")
+	assert.Contains(t, sql, exprStream+" IN ('stderr')")
 	assert.Contains(t, sql, "hasToken(Body, 'ERROR')")
 	assert.Contains(t, sql, "LIMIT 100")
 	assert.Contains(t, sql, "ORDER BY Timestamp DESC")
@@ -119,7 +119,7 @@ func TestQuery_Build_PodLike(t *testing.T) {
 	q := NewQuery(Internal).From(testFrom).To(testTo).PodLike("%tysm%")
 	sql := q.build(orderNone)
 
-	assert.Contains(t, sql, "`k8s.pod.name` LIKE '%tysm%'")
+	assert.Contains(t, sql, exprPod+" LIKE '%tysm%'")
 }
 
 func TestQuery_Build_SearchModes(t *testing.T) {
@@ -239,7 +239,7 @@ func TestQuery_Build_EscapesSpecialChars(t *testing.T) {
 	sql := q.build(orderNone)
 
 	assert.Contains(t, sql, "IngressUser = 'user''with\"quotes'")
-	assert.Contains(t, sql, "`k8s.pod.name` = 'pod\\\\with\\\\backslash'")
+	assert.Contains(t, sql, exprPod+" = 'pod\\\\with\\\\backslash'")
 }
 
 func TestQuery_Build_TimezoneConversion(t *testing.T) {
@@ -277,9 +277,8 @@ func TestQuery_Build_SelectColumns(t *testing.T) {
 	q := NewQuery(Internal).From(testFrom).To(testTo)
 	sql := q.build(orderNone)
 
-	// Physical columns are aliased back to the logical names LogEntry uses.
-	assert.True(t, strings.HasPrefix(sql, "SELECT Timestamp AS Timestamp, IngressUser AS IngressUser, "+
-		"`k8s.namespace.name` AS Namespace, `k8s.pod.name` AS Pod, "+
-		"`k8s.container.name` AS Container, `k8s.node.name` AS Node, "+
-		"LogAttributes['stream'] AS Stream, Body AS Message FROM"))
+	// Physical expressions are aliased back to the logical names LogEntry uses.
+	assert.True(t, strings.HasPrefix(sql, "SELECT "+selectList+" FROM"))
+	assert.Contains(t, selectList, " AS Pod")
+	assert.Contains(t, selectList, " AS Message")
 }

@@ -20,19 +20,31 @@ const (
 	columnMessage     = "Message"
 )
 
-// Physical expressions in the OpenTelemetry log schema. The k8s.* columns are
-// materialized from ResourceAttributes rather than map lookups, so filtering
-// on them stays index-friendly; they need backtick quoting because of the
-// dots in their names. Stream has no promoted column and is read out of
-// LogAttributes — populated on the external tenant, empty on internal.
+// Physical expressions in the OpenTelemetry log schema.
+//
+// The two tenants identify a workload differently and neither populates the
+// other's columns, so each expression falls back rather than binding to one
+// shape. k8s-hosted workloads (the internal tenant) carry the materialized
+// k8s.* columns, promoted from ResourceAttributes and backtick-quoted here
+// because of the dots. VM-hosted devnet nodes (the external tenant) leave
+// those empty and describe themselves through ResourceAttributes instead:
+//
+//	Namespace -> network     (e.g. glamsterdam-devnet-7)
+//	Pod       -> host.name   (e.g. prysm-geth-1)
+//	Node      -> host.name   (the VM is the machine)
+//	Container -> ServiceName (e.g. beacon)
+//
+// Unset values are empty strings rather than NULL on both sides, so a plain
+// emptiness check picks the right one. None of these columns are in the sort
+// key, so wrapping them costs no index usage.
 const (
 	exprTimestamp   = "Timestamp"
 	exprIngressUser = "IngressUser"
-	exprNamespace   = "`k8s.namespace.name`"
-	exprPod         = "`k8s.pod.name`"
-	exprContainer   = "`k8s.container.name`"
-	exprNode        = "`k8s.node.name`"
-	exprStream      = "LogAttributes['stream']"
+	exprNamespace   = "if(`k8s.namespace.name` != '', `k8s.namespace.name`, ResourceAttributes['network'])"
+	exprPod         = "if(`k8s.pod.name` != '', `k8s.pod.name`, ResourceAttributes['host.name'])"
+	exprContainer   = "if(`k8s.container.name` != '', `k8s.container.name`, ServiceName)"
+	exprNode        = "if(`k8s.node.name` != '', `k8s.node.name`, ResourceAttributes['host.name'])"
+	exprStream      = "if(LogAttributes['stream'] != '', LogAttributes['stream'], LogAttributes['log.iostream'])"
 	exprMessage     = "Body"
 )
 
@@ -63,15 +75,11 @@ func physicalColumn(logical string) string {
 }
 
 // isLowCardinality reports whether a logical column decodes as
-// LowCardinality(String). Body is a plain String, and a map lookup yields the
-// map's value type, which is also a plain String.
+// LowCardinality(String). Only IngressUser is read straight off the table:
+// every other column goes through an if() fallback, and if() over a
+// LowCardinality(String) and a String yields a plain String.
 func isLowCardinality(logical string) bool {
-	switch logical {
-	case columnIngressUser, columnNamespace, columnPod, columnContainer, columnNode:
-		return true
-	default:
-		return false
-	}
+	return logical == columnIngressUser
 }
 
 // logColumns holds the ch-go column definitions for log queries.
@@ -80,10 +88,10 @@ func isLowCardinality(logical string) bool {
 type logColumns struct {
 	timestamp   *proto.ColDateTime64
 	ingressUser *proto.ColLowCardinality[string]
-	namespace   *proto.ColLowCardinality[string]
-	pod         *proto.ColLowCardinality[string]
-	container   *proto.ColLowCardinality[string]
-	node        *proto.ColLowCardinality[string]
+	namespace   *proto.ColStr
+	pod         *proto.ColStr
+	container   *proto.ColStr
+	node        *proto.ColStr
 	stream      *proto.ColStr
 	message     *proto.ColStr
 }
@@ -92,10 +100,10 @@ func newLogColumns() *logColumns {
 	return &logColumns{
 		timestamp:   new(proto.ColDateTime64).WithPrecision(proto.PrecisionNano).WithLocation(time.UTC),
 		ingressUser: new(proto.ColStr).LowCardinality(),
-		namespace:   new(proto.ColStr).LowCardinality(),
-		pod:         new(proto.ColStr).LowCardinality(),
-		container:   new(proto.ColStr).LowCardinality(),
-		node:        new(proto.ColStr).LowCardinality(),
+		namespace:   new(proto.ColStr),
+		pod:         new(proto.ColStr),
+		container:   new(proto.ColStr),
+		node:        new(proto.ColStr),
 		stream:      new(proto.ColStr),
 		message:     new(proto.ColStr),
 	}

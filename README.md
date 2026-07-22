@@ -91,21 +91,31 @@ if err := iter.Err(); err != nil {
 - `clickhouselogs.External` — `external.otel_logs` (devnet/testnet node logs)
 
 Both are OpenTelemetry-schema tables. `LogEntry` keeps its original field names;
-each query projects the physical columns onto them:
+each query projects the physical columns onto them.
 
-| `LogEntry` field | Column |
-|---|---|
-| `Timestamp` | `Timestamp` (`DateTime64(9)`) |
-| `IngressUser` | `IngressUser` |
-| `Namespace` | `k8s.namespace.name` |
-| `Pod` | `k8s.pod.name` |
-| `Container` | `k8s.container.name` |
-| `Node` | `k8s.node.name` |
-| `Stream` | `LogAttributes['stream']` |
-| `Message` | `Body` |
+The two tenants identify a workload differently, so the projection falls back
+rather than binding to one shape. k8s-hosted workloads carry the materialized
+`k8s.*` columns; VM-hosted devnet nodes leave those empty and describe
+themselves through `ResourceAttributes`. Unset values are empty strings rather
+than NULL on both sides, so an emptiness check picks the right one:
 
-`Stream` is populated on the external tenant and empty on internal, which does
-not set that attribute.
+| `LogEntry` field | k8s-hosted | VM-hosted |
+|---|---|---|
+| `Timestamp` | `Timestamp` (`DateTime64(9)`) | same |
+| `IngressUser` | `IngressUser` | same |
+| `Namespace` | `k8s.namespace.name` | `ResourceAttributes['network']` |
+| `Pod` | `k8s.pod.name` | `ResourceAttributes['host.name']` |
+| `Container` | `k8s.container.name` | `ServiceName` |
+| `Node` | `k8s.node.name` | `ResourceAttributes['host.name']` |
+| `Stream` | `LogAttributes['log.iostream']` | `LogAttributes['stream']` |
+| `Message` | `Body` | same |
+
+Filters resolve through the same fallback, so `Pod("prysm-geth-1")` matches a
+VM-hosted node just as it matches a k8s pod. None of these columns are in the
+sort key, so the fallback costs no index usage.
+
+On a VM-hosted row `Node` and `Pod` both resolve to the host, because the VM is
+the machine.
 
 ### Filters
 
